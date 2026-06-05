@@ -53,7 +53,7 @@
 <script>
     // 1. 初始化 Supabase 客户端 (替换为你自己的 URL 和 Key)
     const SUPABASE_URL = 'https://mcsxyghcyperkonmnthe.supabase.co';
-    const SUPABASE_ANON_KEY = 'sb_secret_wXSvl3niFk5fAUG9Hc3kUw_sqJMsWL2';
+    const SUPABASE_ANON_KEY = 'sb_publishable_k_d8yMB3o4GxTce4oIyDxA_RTfCunjY';
     const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     let html5QrCode;
@@ -98,4 +98,76 @@
     // 扫描成功回调
     function onScanSuccess(decodedText, decodedResult) {
         if (decodedText !== lastResult) {
-            lastResult = decoded
+            lastResult = decodedText;
+            
+            // 振动反馈
+            if (navigator.vibrate) navigator.vibrate(100);
+
+            // 塞入暂存队列
+            scannedItems.push({
+                content: decodedText,
+                status: 'pending'
+            });
+
+            updateUI();
+            
+            // 2秒后允许再次扫描相同内容，防止手抖重复录入
+            setTimeout(() => { lastResult = ""; }, 2000);
+        }
+    }
+
+    // 更新界面
+    function updateUI() {
+        const listEl = document.getElementById('qr-list');
+        const countEl = document.getElementById('count');
+        const btn = document.getElementById('upload-btn');
+        
+        listEl.innerHTML = '';
+        scannedItems.forEach((item) => {
+            const li = document.createElement('li');
+            const isSaved = item.status === 'saved';
+            
+            li.innerHTML = `
+                <span>${item.content}</span>
+                <span class="status ${isSaved ? 'saved' : ''}">${isSaved ? '✓ 已保存' : '等待上传'}</span>
+            `;
+            listEl.appendChild(li);
+        });
+
+        const pendingCount = scannedItems.filter(i => i.status === 'pending').length;
+        countEl.innerText = pendingCount;
+        btn.disabled = pendingCount === 0;
+    }
+
+    // 3. 逐个保存到 Supabase
+    async function saveAllToSupabase() {
+        const btn = document.getElementById('upload-btn');
+        btn.disabled = true;
+        btn.innerText = "正在逐个保存...";
+
+        for (let i = 0; i < scannedItems.length; i++) {
+            if (scannedItems[i].status === 'pending') {
+                try {
+                    const { error } = await supabase
+                        .from('qr_codes')
+                        .insert([{ content: scannedItems[i].content }]);
+
+                    if (error) throw error;
+
+                    scannedItems[i].status = 'saved';
+                    updateUI(); // 每成功一个，列表里的状态就实时更新一个
+
+                } catch (err) {
+                    console.error("保存失败:", err);
+                    alert(`保存中断！失败内容: ${scannedItems[i].content}`);
+                    break; 
+                }
+            }
+        }
+
+        btn.innerText = "逐个保存到 Supabase";
+        updateUI();
+    }
+</script>
+</body>
+</html>
