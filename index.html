@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>二维码电子化助手</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        body { font-family: -apple-system, sans-serif; margin: 20px; background: #f5f5f7; }
+        #reader { width: 100%; max-width: 500px; margin: 0 auto; border-radius: 8px; overflow: hidden; }
+        .container { max-width: 500px; margin: 0 auto; }
+        .list-section { margin-top: 20px; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        ul { list-style: none; padding: 0; max-height: 200px; overflow-y: auto; }
+        li { padding: 8px; border-bottom: 1px solid #eee; word-break: break-all; display: flex; justify-content: space-between; }
+        .status { font-size: 12px; color: #888; }
+        .status.saved { color: #52c41a; font-weight: bold; }
+        button { width: 100%; padding: 12px; background: #007aff; color: white; border: none; border-radius: 6px; font-size: 16px; margin-top: 10px; cursor: pointer; }
+        button:disabled { background: #d1d1d6; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>条码/二维码批量扫描器</h2>
+    
+    <div id="reader"></div>
+    
+    <div class="list-section">
+        <h3>本次扫描暂存区 (<span id="count">0</span>)</h3>
+        <ul id="qr-list">
+            </ul>
+        <button id="upload-btn" onclick="saveAllToSupabase()" disabled>逐个保存到 Supabase</button>
+    </div>
+</div>
+
+<script>
+    // 1. 初始化 Supabase 客户端 (替换为你自己的 URL 和 Key)
+    const SUPABASE_URL = 'https://mcsxyghcyperkonmnthe.supabase.co';
+    const SUPABASE_ANON_KEY = 'ysb_secret_wXSvl3niFk5fAUG9Hc3kUw_sqJMsWL2';
+    const supabase = '@supabase/supabase-js'.includes('npm') ? null : window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // 内存暂存数组
+    let scannedItems = [];
+    let lastResult = "";
+    let count = 0;
+
+    // 2. 初始化相机扫描
+    const html5QrcodeScanner = new Html5QrcodeScanner(
+        "reader", 
+        { fps: 10, qrbox: { width: 250, height: 250 }, rememberLastCameraUsed: true }
+    );
+
+    function onScanSuccess(decodedText, decodedResult) {
+        // 防止连续对同一个二维码重复识别
+        if (decodedText !== lastResult) {
+            lastResult = decodedText;
+            
+            // 嗡鸣或震动反馈（如果设备支持）
+            if (navigator.vibrate) navigator.vibrate(100);
+
+            // 加入暂存队列
+            scannedItems.push({
+                content: decodedText,
+                status: 'pending'
+            });
+
+            updateUI();
+            
+            // 3秒后允许再次扫描相同内容，如果是不同的码则不受限制
+            setTimeout(() => { lastResult = ""; }, 3000);
+        }
+    }
+
+    // 渲染更新界面
+    function updateUI() {
+        const listEl = document.getElementById('qr-list');
+        const countEl = document.getElementById('count');
+        const btn = document.getElementById('upload-btn');
+        
+        listEl.innerHTML = '';
+        scannedItems.forEach((item, index) => {
+            const li = document.createElement('li');
+            const statusText = item.status === 'saved' ? '✓ 已保存' : '等待上传';
+            const statusClass = item.status === 'saved' ? 'status saved' : 'status';
+            
+            li.innerHTML = `
+                <span>${item.content}</span>
+                <span class="${statusClass}">${statusText}</span>
+            `;
+            listEl.appendChild(li);
+        });
+
+        countEl.innerText = scannedItems.filter(i => i.status === 'pending').length;
+        btn.disabled = !scannedItems.some(i => i.status === 'pending');
+    }
+
+    // 3. 核心：逐个保存到 Supabase
+    async function saveAllToSupabase() {
+        const btn = document.getElementById('upload-btn');
+        btn.disabled = true;
+        btn.innerText = "正在逐个保存...";
+
+        // 遍历队列中所有处于 'pending' 状态的二维码
+        for (let i = 0; i < scannedItems.length; i++) {
+            if (scannedItems[i].status === 'pending') {
+                try {
+                    // 调用 Supabase API 插入数据
+                    const { data, error } = await supabase
+                        .from('qr_codes')
+                        .insert([
+                            { content: scannedItems[i].content }
+                        ]);
+
+                    if (error) throw error;
+
+                    // 标记为已保存并更新 UI 反馈
+                    scannedItems[i].status = 'saved';
+                    updateUI();
+
+                } catch (err) {
+                    console.error("保存失败:", err);
+                    alert(`内容保存失败: ${scannedItems[i].content}`);
+                    break; // 遇到错误停止后续保存，防止队列混乱
+                }
+            }
+        }
+
+        btn.innerText = "逐个保存到 Supabase";
+        // 清理掉已经保存成功的项目，或者留着看历史（这里选择保留看打勾状态）
+    }
+
+    // 启动扫描
+    html5QrcodeScanner.render(onScanSuccess);
+</script>
+</body>
+</html>
