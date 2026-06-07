@@ -6,21 +6,19 @@
 <title>二维码电子化助手</title>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://lf26-cdn-tos.bytecdntp.com/cdn/expire-1-M/html5-qrcode/2.0.3/html5-qrcode.min.js"></script>
 
 <style>
 * { box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f7; padding: 20px; margin: 0; }
 .box { max-width: 600px; margin: 20px auto; background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
 h2 { margin-top: 0; color: #1d1d1f; text-align: center; }
-button { width: 100%; padding: 14px; margin: 10px 0; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+button { width: 100%; padding: 14px; margin: 10px 0; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }
 #start { background-color: #0071e3; color: white; }
-#start:active { background-color: #0077ed; }
 #stop { background-color: #ff3b30; color: white; }
-#stop:active { background-color: #ff453a; }
 #upload { background-color: #34c759; color: white; }
 #upload:disabled { background-color: #aeaeb2; color: #e5e5ea; cursor: not-allowed; }
-#reader { display: none; width: 100%; margin: 15px 0; border-radius: 8px; overflow: hidden; background: #000; }
+#reader { display: none; width: 100%; margin: 15px 0; border-radius: 8px; overflow: hidden; background: #000; min-height: 250px;}
 .status-bar { margin: 15px 0; font-size: 14px; color: #86868b; display: flex; justify-content: space-between; }
 ul { padding-left: 20px; margin: 10px 0; word-break: break-all; color: #1d1d1f; max-height: 200px; overflow-y: auto; }
 li { margin-bottom: 6px; font-size: 14px; }
@@ -37,7 +35,7 @@ li { margin-bottom: 6px; font-size: 14px; }
   
   <div class="status-bar">
     <span>已扫描 <strong id="count" style="color:#0071e3">0</strong> 条</span>
-    <span id="env-info" style="font-size:12px;color:#ff9500">检测环境中...</span>
+    <span id="env-info" style="font-size:12px;color:#ff9500">检测中...</span>
   </div>
   
   <ul id="list"></ul>
@@ -45,17 +43,12 @@ li { margin-bottom: 6px; font-size: 14px; }
 </div>
 
 <script>
-// ==========================================
-// 1. 全局错误捕获器
-// ==========================================
+// 全局异常捕获
 window.onerror = function(msg, url, line) {
-  alert("【网页发生错误】\n错误信息: " + msg + "\n出错行号: " + line);
+  alert("【JS错误】" + msg + "\n行号: " + line);
   return false;
 };
 
-// ==========================================
-// 2. 获取 DOM 元素
-// ==========================================
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
 const uploadBtn = document.getElementById('upload');
@@ -64,9 +57,7 @@ const countSpan = document.getElementById('count');
 const listUl = document.getElementById('list');
 const envInfo = document.getElementById('env-info');
 
-// ==========================================
-// 3. 初始化 Supabase 配置
-// ==========================================
+// 初始化 Supabase
 const SUPABASE_URL = 'https://mcsxyghcyperkonmnthe.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_k_d8yMB3o4GxTce4oIyDxA_RTfCunjY';
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -75,64 +66,113 @@ let scanner = null;
 const data = [];
 const set = new Set();
 
-// 页面加载环境诊断
 window.addEventListener('DOMContentLoaded', () => {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    envInfo.innerText = "环境警告：当前浏览器或协议不支持相机";
+  // 检查底层库是否成功加载
+  if (typeof Html5Qrcode === 'undefined') {
+    envInfo.innerText = "错误：扫码核心库加载失败！";
+    envInfo.style.color = "#ff3b30";
+  } else if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    envInfo.innerText = "环境警告：当前浏览器不支持相机";
     envInfo.style.color = "#ff3b30";
   } else {
-    envInfo.innerText = "协议环境安全 (HTTPS)";
+    envInfo.innerText = "环境正常，等待开启";
     envInfo.style.color = "#34c759";
   }
 });
 
-// ==========================================
-// 4. 开启扫码核心逻辑
-// ==========================================
-startBtn.onclick = async () => {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    alert("不可用！当前环境禁用了 H5 相机组件。\n\n【如果是苹果手机】:\n请务必点击微信右上角『...』选择『在 Safari 中打开』。");
+// 【核心大重构】：移除点击事件最前端的 async，保证“同步手势触发”
+startBtn.onclick = function() {
+  // 检查库
+  if (typeof Html5Qrcode === 'undefined') {
+    alert("扫码组件未能成功加载，请刷新页面重试或检查网络。");
     return;
   }
 
-  try {
-    // 改变 UI 状态
-    readerDiv.style.display = 'block';
-    startBtn.style.display = 'none';
-    stopBtn.style.display = 'block';
+  // 1. 瞬间切换 UI，不给浏览器任何判定异步的机会
+  readerDiv.style.display = 'block';
+  startBtn.style.display = 'none';
+  stopBtn.style.display = 'block';
 
-    // 实例化 Html5Qrcode
+  try {
     if (!scanner) {
       scanner = new Html5Qrcode("reader");
     }
 
-    // 【核心修复】：直接写死正方形大小（250px），移除会导致部分移动端传参 undefined 的动态计算函数
-    await scanner.start(
+    // 2. 纯同步方式调用 start（利用 Promise 的 then 链代替 await）
+    scanner.start(
       { facingMode: "environment" }, 
       {
         fps: 10,
-        qrbox: { width: 250, height: 250 } 
+        qrbox: 250 // 部分旧版本 CDN 库只接受纯数字
       },
-      txt => {
-        // 扫码成功回调
+      function(txt) {
         if (set.has(txt)) return;
         set.add(txt);
-
         data.push({ content: txt, saved: false });
         if (navigator.vibrate) navigator.vibrate(100);
         render();
       },
-      errorMessage => {
-        // 忽略扫码期间每帧未识别到的日志，防止卡顿
+      function(err) {
+        // 逐帧未匹配到二维码的静默回调
       }
-    );
+    ).then(() => {
+       envInfo.innerText = "相机已成功连接";
+       envInfo.style.color = "#34c759";
+    }).catch((e) => {
+       // 捕获异步启动的错误
+       alert("【相机拒绝】\n原因: " + e.message + "\n\n请检查手机系统设置中，该浏览器的摄像头权限是否被永久禁用了。");
+       resetUI();
+    });
 
   } catch (e) {
-    console.error("启动失败：", e);
-    alert("【相机启动失败】\n错误类型: " + e.name + "\n核心原因: " + e.message + "\n\n请确保已允许该网页的相机使用权限。");
+    alert("【同步块崩溃】\n" + e.message);
     resetUI();
   }
 };
 
-// ==========================================
-// 5. 关闭扫
+stopBtn.onclick = function() {
+  if (scanner && scanner.isScanning) {
+     scanner.stop().then(() => { resetUI(); }).catch(() => { resetUI(); });
+  } else {
+     resetUI();
+  }
+};
+
+function resetUI() {
+  readerDiv.style.display = 'none';
+  startBtn.style.display = 'block';
+  stopBtn.style.display = 'none';
+}
+
+function render() {
+  countSpan.innerText = data.length;
+  listUl.innerHTML = '';
+  data.forEach(x => {
+    const li = document.createElement('li');
+    li.innerHTML = x.content + (x.saved ? ' <span style="color:#34c759;font-weight:bold;">✅ 已同步</span>' : ' <span style="color:#ff9500;font-weight:bold;">⏳ 待上传</span>');
+    listUl.appendChild(li);
+  });
+  uploadBtn.disabled = !data.some(x => !x.saved);
+}
+
+uploadBtn.onclick = async () => {
+  const rows = data.filter(x => !x.saved).map(x => ({ content: x.content }));
+  if (rows.length === 0) return;
+  uploadBtn.disabled = true;
+  uploadBtn.innerText = '正在上传...';
+  try {
+    const { error } = await supabase.from('qr_codes').insert(rows);
+    if (error) throw error;
+    data.forEach(x => x.saved = true);
+    render();
+    alert('🎉 数据已成功上传至 Supabase');
+  } catch (e) {
+    alert('❌ 上传失败: ' + e.message);
+    uploadBtn.disabled = false;
+  } finally {
+    uploadBtn.innerText = '上传到 Supabase';
+  }
+};
+</script>
+</body>
+</html>
