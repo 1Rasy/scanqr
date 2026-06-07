@@ -6,57 +6,67 @@
 <title>二维码电子化助手</title>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://lf3-cdn-tos.bytecdntp.com/cdn/expire-1-M/jsqrcode/1.0.2/jsqrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 
 <style>
 * { box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f7; padding: 20px; margin: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f5f5f7; padding: 20px; margin: 0; }
 .box { max-width: 600px; margin: 20px auto; background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
 h2 { margin-top: 0; color: #1d1d1f; text-align: center; }
-.upload-btn-wrapper { position: relative; overflow: hidden; display: block; margin: 15px 0; }
-.btn-primary { border: none; color: white; background-color: #0071e3; padding: 14px; border-radius: 8px; font-size: 16px; font-weight: 600; width: 100%; text-align: center; display: block; cursor: pointer; }
-.btn-primary:active { background-color: #0077ed; }
-/* 隐藏原生文件输入框，用好看的按钮盖住 */
-.upload-btn-wrapper input[type=file] { font-size: 100px; position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
-#upload { width: 100%; padding: 14px; margin: 10px 0; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; background-color: #34c759; color: white; cursor: pointer; }
+button { width: 100%; padding: 14px; margin: 10px 0; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }
+#start { background-color: #0071e3; color: white; }
+#stop { background-color: #ff3b30; color: white; }
+#upload { background-color: #34c759; color: white; }
 #upload:disabled { background-color: #aeaeb2; color: #e5e5ea; cursor: not-allowed; }
+
+/* 视频容器区域 */
+.video-container { display: none; position: relative; width: 100%; margin: 15px 0; border-radius: 8px; overflow: hidden; background: #000; }
+#video { width: 100%; height: auto; display: block; }
+/* 模拟一个扫描框，让界面更好看 */
+.scanner-laser { position: absolute; top: 25%; left: 15%; width: 70%; height: 50%; border: 2px dashed #34c759; box-shadow: 0 0 10px rgba(52, 199, 89, 0.5); pointer-events: none; }
+
 .status-bar { margin: 15px 0; font-size: 14px; color: #86868b; display: flex; justify-content: space-between; }
-ul { padding-left: 20px; margin: 10px 0; word-break: break-all; color: #1d1d1f; max-height: 250px; overflow-y: auto; }
+ul { padding-left: 20px; margin: 10px 0; word-break: break-all; color: #1d1d1f; max-height: 200px; overflow-y: auto; }
 li { margin-bottom: 6px; font-size: 14px; }
-#preview { width: 100%; max-height: 200px; object-fit: contain; display: none; margin: 10px 0; border-radius: 8px; background: #f0f0f2; padding: 5px; }
 </style>
 </head>
 <body>
 
 <div class="box">
   <h2>二维码电子化助手</h2>
+  <button id="start">开启自动扫码</button>
+  <button id="stop" style="display:none">关闭扫码</button>
   
-  <div class="upload-btn-wrapper">
-    <button class="btn-primary">📸 拍照 / 扫码识别</button>
-    <input type="file" id="camera-input" accept="image/*" capture="environment">
+  <div class="video-container" id="video-box">
+    <video id="video" playsinline></video>
+    <div class="scanner-laser"></div>
   </div>
-
-  <img id="preview" alt="照片预览">
   
   <div class="status-bar">
     <span>已扫描 <strong id="count" style="color:#0071e3">0</strong> 条</span>
-    <span id="env-info" style="font-size:12px;color:#34c759">系统就绪</span>
+    <span id="env-info" style="font-size:12px;color:#34c759">系统已就绪</span>
   </div>
   
   <ul id="list"></ul>
   <button id="upload" disabled>上传到 Supabase</button>
 </div>
 
+<canvas id="canvas" style="display:none;"></canvas>
+
 <script>
-// 全局异常捕获弹窗
+// 全局脚本错误捕获
 window.onerror = function(msg, url, line) {
-  alert("【运行错误】" + msg + "\n错误位置: 行号 " + line);
+  alert("【页面代码错误】" + msg + "\n行号: " + line);
   return false;
 };
 
-const cameraInput = document.getElementById('camera-input');
-const previewImg = document.getElementById('preview');
+const startBtn = document.getElementById('start');
+const stopBtn = document.getElementById('stop');
 const uploadBtn = document.getElementById('upload');
+const videoBox = document.getElementById('video-box');
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
 const countSpan = document.getElementById('count');
 const listUl = document.getElementById('list');
 const envInfo = document.getElementById('env-info');
@@ -66,63 +76,128 @@ const SUPABASE_URL = 'https://mcsxyghcyperkonmnthe.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_k_d8yMB3o4GxTce4oIyDxA_RTfCunjY';
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+let localStream = null;
+let animationFrameId = null;
 const data = [];
 const set = new Set();
 
 // ==========================================
-// 核心逻辑：当用户拍完照或选完图后触发
+// 1. 启动纯原生摄像头视频流
 // ==========================================
-cameraInput.onchange = function(event) {
-  const file = event.target.files[0];
-  if (!file) return;
+startBtn.onclick = function() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("当前环境不支持 H5 相机。如果使用的是 iPhone，请务必使用自带的 Safari 浏览器打开此链接！");
+    return;
+  }
 
-  envInfo.innerText = "正在解析图片...";
-  envInfo.style.color = "#ff9500";
+  // 立即切换 UI，保证同步触发
+  videoBox.style.display = 'block';
+  startBtn.style.display = 'none';
+  stopBtn.style.display = 'block';
+  envInfo.innerText = "正在唤醒后置摄像头...";
 
-  // 1. 本地图片预览
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    previewImg.src = e.target.result;
-    previewImg.style.display = 'block';
+  // 请求纯原生后置摄像头，完全不借助外部库，最硬核的拉起方式
+  navigator.mediaDevices.getUserMedia({
+    video: { 
+      facingMode: { exact: "environment" } // 强制要求后置摄像头
+    },
+    audio: false
+  }).then(function(stream) {
+    // 成功捕获视频流
+    localStream = stream;
+    video.srcObject = stream;
+    // 针对 iOS 系统的兼容配置
+    video.setAttribute("playsinline", true); 
+    video.play();
+    
+    envInfo.innerText = "自动扫码中...";
+    envInfo.style.color = "#34c759";
 
-    // 2. 核心：调用 jsqrcode 解析图片中的二维码
-    try {
-      qrcode.callback = function(decodedText) {
-        if (set.has(decodedText)) {
-          alert("该二维码已在列表中，请勿重复扫描");
-          envInfo.innerText = "就绪";
-          envInfo.style.color = "#34c759";
-          return;
-        }
-        
-        // 识别成功，存入数组
-        set.add(decodedText);
-        data.push({ content: decodedText, saved: false });
-        
-        if (navigator.vibrate) navigator.vibrate(100);
-        render();
-        
-        envInfo.innerText = "解析成功 ✅";
-        envInfo.style.color = "#34c759";
-      };
-
-      // 异常拦截：如果库无法解析出二维码
-      qrcode.onerror = function() {
-        alert("未能识别出清晰的二维码，请对准并重新拍照。");
-        envInfo.innerText = "解析失败 ❌";
-        envInfo.style.color = "#ff3b30";
-      };
-
-      // 开始解析
-      qrcode.decode(e.target.result);
-
-    } catch (err) {
-      alert("解析组件发生异常: " + err.message);
-    }
-  };
-  reader.readAsDataURL(file);
+    // 开启高频无感式的每帧视频图像解码循环
+    animationFrameId = requestAnimationFrame(tick);
+  }).catch(function(err) {
+    // 如果 exact 后置失败（某些老安卓机不支持 exact 语法），进行普通兼容性后置尝试
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" },
+      audio: false
+    }).then(function(stream) {
+      localStream = stream;
+      video.srcObject = stream;
+      video.setAttribute("playsinline", true);
+      video.play();
+      envInfo.innerText = "自动扫码中...";
+      envInfo.style.color = "#34c759";
+      animationFrameId = requestAnimationFrame(tick);
+    }).catch(function(e) {
+      alert("【无法唤起相机】\n原因: " + e.message + "\n\n请确保已在弹出的提示中允许了相机权限，或检查系统设置。");
+      resetUI();
+    });
+  });
 };
 
+// ==========================================
+// 2. 核心：每帧实时自动扫码解析（利用 jsQR）
+// ==========================================
+function tick() {
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    // 让隐藏的 canvas 尺寸匹配实时视频流的分辨率
+    canvas.height = video.videoHeight;
+    canvas.width = video.videoWidth;
+    
+    // 将视频当前帧绘制到 canvas 上
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    // 抓取 canvas 像素数据
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    
+    // 调用性能极强的 jsQR 引擎在底层快速寻找并破解二维码
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+      inversionAttempts: "dontInvert",
+    });
+
+    // 如果实时帧里抓到了二维码
+    if (code && code.data) {
+      const txt = code.data;
+      if (!set.has(txt)) {
+        set.add(txt);
+        data.push({ content: txt, saved: false });
+        
+        // 手机震动反馈
+        if (navigator.vibrate) navigator.vibrate(100);
+        render();
+      }
+    }
+  }
+  // 保持实时循环
+  if (localStream) {
+    animationFrameId = requestAnimationFrame(tick);
+  }
+}
+
+// ==========================================
+// 3. 关闭相机与清理
+// ==========================================
+stopBtn.onclick = function() {
+  resetUI();
+};
+
+function resetUI() {
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+  }
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+    localStream = null;
+  }
+  video.srcObject = null;
+  videoBox.style.display = 'none';
+  startBtn.style.display = 'block';
+  stopBtn.style.display = 'none';
+  envInfo.innerText = "系统已就绪";
+  envInfo.style.color = "#86868b";
+}
+
+// 列表渲染
 function render() {
   countSpan.innerText = data.length;
   listUl.innerHTML = '';
@@ -134,14 +209,12 @@ function render() {
   uploadBtn.disabled = !data.some(x => !x.saved);
 }
 
-// Supabase 上传逻辑
+// Supabase 上传
 uploadBtn.onclick = async () => {
   const rows = data.filter(x => !x.saved).map(x => ({ content: x.content }));
   if (rows.length === 0) return;
-  
   uploadBtn.disabled = true;
   uploadBtn.innerText = '正在上传...';
-  
   try {
     const { error } = await supabase.from('qr_codes').insert(rows);
     if (error) throw error;
@@ -151,7 +224,7 @@ uploadBtn.onclick = async () => {
   } catch (e) {
     alert('❌ 上传失败: ' + e.message);
     uploadBtn.disabled = false;
-  } {
+  } finally {
     uploadBtn.innerText = '上传到 Supabase';
   }
 };
