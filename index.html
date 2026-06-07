@@ -30,7 +30,7 @@ ul{padding-left: 20px; word-break: break-all;}
 </div>
 
 <script>
-// 1. 显式获取 DOM 元素，防止兼容性问题
+// 1. 显式获取 DOM 元素
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
 const uploadBtn = document.getElementById('upload');
@@ -48,32 +48,35 @@ const set=new Set();
 
 startBtn.onclick=async()=>{
  try{
-   // 先显示容器
+   // 基础环境诊断
+   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("当前浏览器不支持 HTML5 相机 API，请尝试更换原生浏览器（如 iOS 的 Safari 或安卓的 Chrome）");
+      return;
+   }
+
+   // 切换 UI 状态
    readerDiv.style.display='block';
    startBtn.style.display='none';
    stopBtn.style.display='block';
 
-   // 如果已经初始化过，不要重复 new
+   // 实例化扫码器
    if (!scanner) {
       scanner = new Html5Qrcode("reader");
    }
 
-   // 获取摄像头（这里会触发浏览器的权限提示）
-   const cams = await Html5Qrcode.getCameras();
-
-   if(!cams || !cams.length){
-      alert("未找到摄像头，请检查设备连接或是否禁用了摄像头权限。");
-      resetUI();
-      return;
-   }
-
-   // 优先选择后置摄像头
-   const backCam=cams.find(c=>/back|rear|environment/i.test(c.label));
-   const camId=(backCam||cams[0]).id;
-
+   // 【关键改动】不再使用 getCameras()，直接使用 facingMode 启动
+   // 这样能最直接、最稳定地在移动端激发出权限弹窗
    await scanner.start(
-      camId,
-      {fps:10, qrbox:{width:250,height:250}},
+      { facingMode: "environment" }, // 强制调用后置环境摄像头
+      {
+         fps: 10,
+         qrbox: function(width, height) {
+             // 移动端动态计算扫码框大小，防止写死 250px 在小屏上错位
+             const minEdge = Math.min(width, height);
+             const fontSize = Math.floor(minEdge * 0.6);
+             return { width: fontSize, height: fontSize };
+         }
+      },
       txt=>{
         if(set.has(txt)) return;
         set.add(txt);
@@ -82,13 +85,14 @@ startBtn.onclick=async()=>{
         render();
       },
       errorMessage => {
-        // 扫码过程中的每一帧如果没有识别到二维码，会进这个回调，通常留空即可，避免频繁 log
+        // 每帧未识别到二维码时的回调，留空避免卡顿
       }
    );
 
  }catch(e){
-   console.error("相机启动失败详细信息:", e);
-   alert("启动失败: " + e.message + "\n请确保在 HTTPS 环境下运行，并允许了摄像头权限。");
+   console.error("详细错误日志:", e);
+   // 将错误直接弹窗打印出来，方便在手机上肉眼调试
+   alert("相机启动失败!\n错误类型: " + e.name + "\n错误信息: " + e.message);
    resetUI();
  }
 };
