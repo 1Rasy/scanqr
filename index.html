@@ -2,151 +2,118 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>二维码电子化助手</title>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://unpkg.com/html5-qrcode"></script>
 
 <style>
-body{font-family:-apple-system,sans-serif;margin:20px;background:#f5f5f7;color:#333}
-.container{max-width:600px;margin:auto}
-.card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 4px 10px rgba(0,0,0,.05);margin-bottom:16px}
+body{font-family:-apple-system,sans-serif;background:#f5f5f7;padding:20px}
+.box{max-width:600px;margin:auto;background:#fff;padding:16px;border-radius:12px}
+button{width:100%;padding:14px;margin:8px 0;border:none;border-radius:8px}
 #reader{display:none}
-.btn{width:100%;padding:14px;border:none;border-radius:8px;font-size:16px;font-weight:bold;margin-top:10px;cursor:pointer}
-.primary{background:#007aff;color:#fff}
-.danger{background:#ff3b30;color:#fff}
-.success{background:#34c759;color:#fff}
-.btn:disabled{background:#ccc}
-ul{list-style:none;padding:0;margin:0;max-height:400px;overflow:auto}
-li{padding:10px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;gap:10px}
-.saved{color:#34c759}
 </style>
 </head>
 <body>
-<div class="container">
-<div class="card">
+<div class="box">
 <h2>二维码电子化助手</h2>
-<button id="startBtn" class="btn primary">📷 开启扫码</button>
-<button id="stopBtn" class="btn danger" style="display:none">🛑 关闭相机</button>
+<button id="start">开启扫码</button>
+<button id="stop" style="display:none">关闭扫码</button>
 <div id="reader"></div>
-</div>
-
-<div class="card">
-<h3>已扫描 <span id="count">0</span> 条</h3>
+<div>已扫描 <span id="count">0</span> 条</div>
 <ul id="list"></ul>
-<button id="uploadBtn" class="btn success" disabled>☁️ 上传到 Supabase</button>
-</div>
+<button id="upload" disabled>上传到 Supabase</button>
 </div>
 
 <script>
 const SUPABASE_URL='https://mcsxyghcyperkonmnthe.supabase.co';
 const SUPABASE_ANON_KEY='sb_publishable_k_d8yMB3o4GxTce4oIyDxA_RTfCunjY';
-
 const supabase=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
 
-let html5QrCode=null;
-const scannedItems=[];
-const scannedSet=new Set();
+let scanner=null;
+const data=[];
+const set=new Set();
 
-const countEl=document.getElementById('count');
-const listEl=document.getElementById('list');
-const uploadBtn=document.getElementById('uploadBtn');
-
-document.getElementById('startBtn').onclick=startScanning;
-document.getElementById('stopBtn').onclick=stopScanning;
-uploadBtn.onclick=uploadAll;
-
-async function startScanning(){
- document.getElementById('reader').style.display='block';
- document.getElementById('startBtn').style.display='none';
- document.getElementById('stopBtn').style.display='block';
-
- html5QrCode=new Html5Qrcode("reader");
-
- await html5QrCode.start(
-  {facingMode:"environment"},
-  {fps:5,qrbox:{width:280,height:280}},
-  onScanSuccess
- ).catch(err=>{
-   alert("相机启动失败");
-   console.error(err);
- });
-}
-
-async function stopScanning(){
- if(!html5QrCode) return;
+start.onclick=async()=>{
  try{
-   await html5QrCode.stop();
-   await html5QrCode.clear();
+   reader.style.display='block';
+   start.style.display='none';
+   stop.style.display='block';
+
+   scanner=new Html5Qrcode("reader");
+
+   const cams=await Html5Qrcode.getCameras();
+
+   if(!cams || !cams.length){
+      alert("未找到摄像头");
+      return;
+   }
+
+   const backCam=cams.find(c=>/back|rear|environment/i.test(c.label));
+   const camId=(backCam||cams[0]).id;
+
+   await scanner.start(
+      camId,
+      {fps:10,qrbox:{width:250,height:250}},
+      txt=>{
+        if(set.has(txt)) return;
+        set.add(txt);
+
+        data.push({content:txt,saved:false});
+
+        if(navigator.vibrate) navigator.vibrate(100);
+
+        render();
+      }
+   );
+
+ }catch(e){
+   console.error(e);
+   alert("启动失败: "+e.message);
+ }
+};
+
+stop.onclick=async()=>{
+ try{
+   if(scanner){
+      await scanner.stop();
+      await scanner.clear();
+   }
  }catch(e){}
- document.getElementById('reader').style.display='none';
- document.getElementById('startBtn').style.display='block';
- document.getElementById('stopBtn').style.display='none';
-}
 
-function onScanSuccess(text){
- if(scannedSet.has(text)) return;
-
- scannedSet.add(text);
-
- if(navigator.vibrate) navigator.vibrate(100);
-
- scannedItems.push({
-   content:text,
-   status:'pending'
- });
-
- render();
-}
+ reader.style.display='none';
+ start.style.display='block';
+ stop.style.display='none';
+};
 
 function render(){
- countEl.innerText=scannedItems.length;
- listEl.innerHTML='';
+ count.innerText=data.length;
+ list.innerHTML='';
 
- scannedItems.forEach(item=>{
+ data.forEach(x=>{
    const li=document.createElement('li');
-   li.innerHTML=`
-    <span style="word-break:break-all">${item.content}</span>
-    <span class="${item.status==='saved'?'saved':''}">
-      ${item.status==='saved'?'已保存':'待上传'}
-    </span>
-   `;
-   listEl.appendChild(li);
+   li.innerHTML=x.content+(x.saved?' ✅':'');
+   list.appendChild(li);
  });
 
- uploadBtn.disabled=!scannedItems.some(x=>x.status==='pending');
+ upload.disabled=!data.some(x=>!x.saved);
 }
 
-async function uploadAll(){
- const rows=scannedItems
-  .filter(x=>x.status==='pending')
-  .map(x=>({content:x.content}));
-
- if(!rows.length) return;
-
- uploadBtn.disabled=true;
- uploadBtn.innerText='上传中...';
+upload.onclick=async()=>{
+ const rows=data.filter(x=>!x.saved).map(x=>({content:x.content}));
 
  try{
-   const {error}=await supabase
-    .from('qr_codes')
-    .insert(rows);
-
+   const {error}=await supabase.from('qr_codes').insert(rows);
    if(error) throw error;
 
-   scannedItems.forEach(x=>{
-     if(x.status==='pending') x.status='saved';
-   });
-
+   data.forEach(x=>x.saved=true);
    render();
    alert('上传成功');
- }catch(err){
-   alert('上传失败：'+err.message);
+ }catch(e){
+   alert('上传失败: '+e.message);
  }
-
- uploadBtn.innerText='☁️ 上传到 Supabase';
-}
+};
 </script>
 </body>
 </html>
