@@ -2,145 +2,211 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>二维码电子化助手</title>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
 <style>
-body{font-family:-apple-system,sans-serif;background:#f5f5f7;padding:20px}
-.box{max-width:600px;margin:auto;background:#fff;padding:16px;border-radius:12px;box-shadow: 0 4px 12px rgba(0,0,0,0.1)}
-button{width:100%;padding:14px;margin:8px 0;border:none;border-radius:8px;background-color: #0071e3;color: white;font-size: 16px;cursor: pointer;}
-button:disabled{background-color: #ccc;cursor: not-allowed;}
-#stop{background-color: #ff3b30;}
-#reader{display:none; width: 100%; margin: 10px 0; border-radius: 8px; overflow: hidden;}
-ul{padding-left: 20px; word-break: break-all;}
+* { box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f7; padding: 20px; margin: 0; }
+.box { max-width: 600px; margin: 20px auto; background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+h2 { margin-top: 0; color: #1d1d1f; text-align: center; }
+button { width: 100%; padding: 14px; margin: 10px 0; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+#start { background-color: #0071e3; color: white; }
+#start:active { background-color: #0077ed; }
+#stop { background-color: #ff3b30; color: white; }
+#stop:active { background-color: #ff453a; }
+#upload { background-color: #34c759; color: white; }
+#upload:disabled { background-color: #aeaeb2; color: #e5e5ea; cursor: not-allowed; }
+#reader { display: none; width: 100%; margin: 15px 0; border-radius: 8px; overflow: hidden; background: #000; }
+.status-bar { margin: 15px 0; font-size: 14px; color: #86868b; display: flex; justify-content: space-between; }
+ul { padding-left: 20px; margin: 10px 0; word-break: break-all; color: #1d1d1f; max-height: 200px; overflow-y: auto; }
+li { margin-bottom: 6px; font-size: 14px; }
 </style>
 </head>
 <body>
+
 <div class="box">
-<h2>二维码电子化助手</h2>
-<button id="start">开启扫码</button>
-<button id="stop" style="display:none">关闭扫码</button>
-<div id="reader"></div>
-<div>已扫描 <span id="count">0</span> 条</div>
-<ul id="list"></ul>
-<button id="upload" disabled>上传到 Supabase</button>
+  <h2>二维码电子化助手</h2>
+  <button id="start">开启扫码</button>
+  <button id="stop" style="display:none">关闭扫码</button>
+  
+  <div id="reader"></div>
+  
+  <div class="status-bar">
+    <span>已扫描 <strong id="count" style="color:#0071e3">0</strong> 条</span>
+    <span id="env-info" style="font-size:12px;color:#ff9500">检测环境中...</span>
+  </div>
+  
+  <ul id="list"></ul>
+  <button id="upload" disabled>上传到 Supabase</button>
 </div>
 
 <script>
-// 1. 显式获取 DOM 元素
+// ==========================================
+// 1. 全局错误捕获器（移动端极其重要，有任何报错直接弹窗）
+// ==========================================
+window.onerror = function(msg, url, line) {
+  alert("【网页发生JS脚本错误】\n错误信息: " + msg + "\n出错行号: " + line);
+  return false;
+};
+
+// ==========================================
+// 2. 显式获取 DOM 元素，杜绝快捷访问的兼容性大坑
+// ==========================================
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
 const uploadBtn = document.getElementById('upload');
 const readerDiv = document.getElementById('reader');
 const countSpan = document.getElementById('count');
 const listUl = document.getElementById('list');
+const envInfo = document.getElementById('env-info');
 
-const SUPABASE_URL='https://mcsxyghcyperkonmnthe.supabase.co';
-const SUPABASE_ANON_KEY='sb_publishable_k_d8yMB3o4GxTce4oIyDxA_RTfCunjY';
-const supabase=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+// ==========================================
+// 3. 初始化 Supabase 配置
+// ==========================================
+const SUPABASE_URL = 'https://mcsxyghcyperkonmnthe.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_k_d8yMB3o4GxTce4oIyDxA_RTfCunjY';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-let scanner=null;
-const data=[];
-const set=new Set();
+let scanner = null;
+const data = [];
+const set = new Set();
 
-startBtn.onclick=async()=>{
- try{
-   // 基础环境诊断
-   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      alert("当前浏览器不支持 HTML5 相机 API，请尝试更换原生浏览器（如 iOS 的 Safari 或安卓的 Chrome）");
-      return;
-   }
+// 页面加载时进行基础环境诊断
+window.addEventListener('DOMContentLoaded', () => {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    envInfo.innerText = "环境警告：当前浏览器禁用了相机组件";
+    envInfo.style.color = "#ff3b30";
+  } else {
+    envInfo.innerText = "协议环境安全 (HTTPS)";
+    envInfo.style.color = "#34c759";
+  }
+});
 
-   // 切换 UI 状态
-   readerDiv.style.display='block';
-   startBtn.style.display='none';
-   stopBtn.style.display='block';
+// ==========================================
+// 4. 开启扫码核心逻辑
+// ==========================================
+startBtn.onclick = async () => {
+  // 环境前置检查
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("不可用！当前浏览器或App容器拦截了 H5 相机组件。\n\n【解决办法】：\n1. 如果是苹果手机，必须用 Safari 浏览器打开此链接。\n2. 如果是安卓手机，请使用 Chrome 浏览器打开。");
+    return;
+  }
 
-   // 实例化扫码器
-   if (!scanner) {
+  try {
+    // 改变 UI 状态
+    readerDiv.style.display = 'block';
+    startBtn.style.display = 'none';
+    stopBtn.style.display = 'block';
+
+    // 实例化 Html5Qrcode
+    if (!scanner) {
       scanner = new Html5Qrcode("reader");
-   }
+    }
 
-   // 【关键改动】不再使用 getCameras()，直接使用 facingMode 启动
-   // 这样能最直接、最稳定地在移动端激发出权限弹窗
-   await scanner.start(
-      { facingMode: "environment" }, // 强制调用后置环境摄像头
+    // 移动端动态计算扫码框（自适应屏幕）
+    const qrboxFunction = (viewfinderWidth, viewfinderHeight) => {
+      const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+      const edgeSize = Math.floor(minEdge * 0.65); // 占屏幕窄边 65% 的正方形
+      return { width: edgeSize, height: edgeSize };
+    };
+
+    // 直接采用最激进的直连后置摄像头模式，绕过 getCameras() 的死锁
+    await scanner.start(
+      { facingMode: "environment" }, 
       {
-         fps: 10,
-         qrbox: function(width, height) {
-             // 移动端动态计算扫码框大小，防止写死 250px 在小屏上错位
-             const minEdge = Math.min(width, height);
-             const fontSize = Math.floor(minEdge * 0.6);
-             return { width: fontSize, height: fontSize };
-         }
+        fps: 15, // 稍微提高帧率，提高移动端扫码敏捷度
+        qrbox: qrboxFunction
       },
-      txt=>{
-        if(set.has(txt)) return;
+      txt => {
+        // 扫码成功回调
+        if (set.has(txt)) return;
         set.add(txt);
-        data.push({content:txt,saved:false});
-        if(navigator.vibrate) navigator.vibrate(100);
+
+        data.push({ content: txt, saved: false });
+        
+        // 震动反馈
+        if (navigator.vibrate) navigator.vibrate(100);
+        
         render();
       },
       errorMessage => {
-        // 每帧未识别到二维码时的回调，留空避免卡顿
+        // 忽略扫码期间的逐帧报错，防止频繁日志导致老旧手机卡死
       }
-   );
+    );
 
- }catch(e){
-   console.error("详细错误日志:", e);
-   // 将错误直接弹窗打印出来，方便在手机上肉眼调试
-   alert("相机启动失败!\n错误类型: " + e.name + "\n错误信息: " + e.message);
-   resetUI();
- }
+  } catch (e) {
+    console.error("启动详情：", e);
+    // 将捕获到的核心相机错误直接抛给用户，便于人眼定位
+    alert("【相机启动崩溃】\n错误类型: " + e.name + "\n核心原因: " + e.message + "\n\n请确认已允许该网页使用摄像头权限，且没有其他App正在占用相机。");
+    resetUI();
+  }
 };
 
-stopBtn.onclick=async()=>{
- try{
-   if(scanner && scanner.isScanning){
+// ==========================================
+// 5. 关闭扫码逻辑
+// ==========================================
+stopBtn.onclick = async () => {
+  try {
+    if (scanner && scanner.isScanning) {
       await scanner.stop();
-   }
- }catch(e){
-   console.error(e);
- }
- resetUI();
+    }
+  } catch (e) {
+    console.error("关闭扫码器失败", e);
+  }
+  resetUI();
 };
 
 function resetUI() {
- readerDiv.style.display='none';
- startBtn.style.display='block';
- stopBtn.style.display='none';
+  readerDiv.style.display = 'none';
+  startBtn.style.display = 'block';
+  stopBtn.style.display = 'none';
 }
 
-function render(){
- countSpan.innerText=data.length;
- listUl.innerHTML='';
+// ==========================================
+// 6. 列表渲染逻辑
+// ==========================================
+function render() {
+  countSpan.innerText = data.length;
+  listUl.innerHTML = '';
 
- data.forEach(x=>{
-   const li=document.createElement('li');
-   li.innerHTML=x.content+(x.saved?' ✅':'');
-   listUl.appendChild(li);
- });
+  data.forEach(x => {
+    const li = document.createElement('li');
+    li.innerHTML = x.content + (x.saved ? ' <span style="color:#34c759;font-weight:bold;">✅ 已同步</span>' : ' <span style="color:#ff9500;font-weight:bold;">⏳ 待上传</span>');
+    listUl.appendChild(li);
+  });
 
- uploadBtn.disabled=!data.some(x=>!x.saved);
+  // 只有存在未保存的数据时，上传按钮才可用
+  uploadBtn.disabled = !data.some(x => !x.saved);
 }
 
-uploadBtn.onclick=async()=>{
- const rows=data.filter(x=>!x.saved).map(x=>({content:x.content}));
- if(rows.length === 0) return;
+// ==========================================
+// 7. Supabase 上传逻辑
+// ==========================================
+uploadBtn.onclick = async () => {
+  const rows = data.filter(x => !x.saved).map(x => ({ content: x.content }));
+  if (rows.length === 0) return;
 
- try{
-   const {error}=await supabase.from('qr_codes').insert(rows);
-   if(error) throw error;
+  uploadBtn.disabled = true;
+  uploadBtn.innerText = '正在上传...';
 
-   data.forEach(x=>x.saved=true);
-   render();
-   alert('上传成功');
- }catch(e){
-   alert('上传失败: '+e.message);
- }
+  try {
+    const { error } = await supabase.from('qr_codes').insert(rows);
+    if (error) throw error;
+
+    // 修改本地状态为已保存
+    data.forEach(x => x.saved = true);
+    render();
+    alert('🎉 数据已成功上传至 Supabase 数据库');
+  } catch (e) {
+    alert('❌ 上传失败，错误信息: ' + e.message);
+    uploadBtn.disabled = false;
+  } finally {
+    uploadBtn.innerText = '上传到 Supabase';
+  }
 };
 </script>
 </body>
