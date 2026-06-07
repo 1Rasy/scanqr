@@ -6,13 +6,16 @@
 <title>二维码电子化助手</title>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
 <style>
 body{font-family:-apple-system,sans-serif;background:#f5f5f7;padding:20px}
-.box{max-width:600px;margin:auto;background:#fff;padding:16px;border-radius:12px}
-button{width:100%;padding:14px;margin:8px 0;border:none;border-radius:8px}
-#reader{display:none}
+.box{max-width:600px;margin:auto;background:#fff;padding:16px;border-radius:12px;box-shadow: 0 4px 12px rgba(0,0,0,0.1)}
+button{width:100%;padding:14px;margin:8px 0;border:none;border-radius:8px;background-color: #0071e3;color: white;font-size: 16px;cursor: pointer;}
+button:disabled{background-color: #ccc;cursor: not-allowed;}
+#stop{background-color: #ff3b30;}
+#reader{display:none; width: 100%; margin: 10px 0; border-radius: 8px; overflow: hidden;}
+ul{padding-left: 20px; word-break: break-all;}
 </style>
 </head>
 <body>
@@ -27,6 +30,14 @@ button{width:100%;padding:14px;margin:8px 0;border:none;border-radius:8px}
 </div>
 
 <script>
+// 1. 显式获取 DOM 元素，防止兼容性问题
+const startBtn = document.getElementById('start');
+const stopBtn = document.getElementById('stop');
+const uploadBtn = document.getElementById('upload');
+const readerDiv = document.getElementById('reader');
+const countSpan = document.getElementById('count');
+const listUl = document.getElementById('list');
+
 const SUPABASE_URL='https://mcsxyghcyperkonmnthe.supabase.co';
 const SUPABASE_ANON_KEY='sb_publishable_k_d8yMB3o4GxTce4oIyDxA_RTfCunjY';
 const supabase=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
@@ -35,73 +46,86 @@ let scanner=null;
 const data=[];
 const set=new Set();
 
-start.onclick=async()=>{
+startBtn.onclick=async()=>{
  try{
-   reader.style.display='block';
-   start.style.display='none';
-   stop.style.display='block';
+   // 先显示容器
+   readerDiv.style.display='block';
+   startBtn.style.display='none';
+   stopBtn.style.display='block';
 
-   scanner=new Html5Qrcode("reader");
+   // 如果已经初始化过，不要重复 new
+   if (!scanner) {
+      scanner = new Html5Qrcode("reader");
+   }
 
-   const cams=await Html5Qrcode.getCameras();
+   // 获取摄像头（这里会触发浏览器的权限提示）
+   const cams = await Html5Qrcode.getCameras();
 
    if(!cams || !cams.length){
-      alert("未找到摄像头");
+      alert("未找到摄像头，请检查设备连接或是否禁用了摄像头权限。");
+      resetUI();
       return;
    }
 
+   // 优先选择后置摄像头
    const backCam=cams.find(c=>/back|rear|environment/i.test(c.label));
    const camId=(backCam||cams[0]).id;
 
    await scanner.start(
       camId,
-      {fps:10,qrbox:{width:250,height:250}},
+      {fps:10, qrbox:{width:250,height:250}},
       txt=>{
         if(set.has(txt)) return;
         set.add(txt);
-
         data.push({content:txt,saved:false});
-
         if(navigator.vibrate) navigator.vibrate(100);
-
         render();
+      },
+      errorMessage => {
+        // 扫码过程中的每一帧如果没有识别到二维码，会进这个回调，通常留空即可，避免频繁 log
       }
    );
 
  }catch(e){
-   console.error(e);
-   alert("启动失败: "+e.message);
+   console.error("相机启动失败详细信息:", e);
+   alert("启动失败: " + e.message + "\n请确保在 HTTPS 环境下运行，并允许了摄像头权限。");
+   resetUI();
  }
 };
 
-stop.onclick=async()=>{
+stopBtn.onclick=async()=>{
  try{
-   if(scanner){
+   if(scanner && scanner.isScanning){
       await scanner.stop();
-      await scanner.clear();
    }
- }catch(e){}
-
- reader.style.display='none';
- start.style.display='block';
- stop.style.display='none';
+ }catch(e){
+   console.error(e);
+ }
+ resetUI();
 };
 
+function resetUI() {
+ readerDiv.style.display='none';
+ startBtn.style.display='block';
+ stopBtn.style.display='none';
+}
+
 function render(){
- count.innerText=data.length;
- list.innerHTML='';
+ countSpan.innerText=data.length;
+ listUl.innerHTML='';
 
  data.forEach(x=>{
    const li=document.createElement('li');
    li.innerHTML=x.content+(x.saved?' ✅':'');
-   list.appendChild(li);
+   listUl.appendChild(li);
  });
 
- upload.disabled=!data.some(x=>!x.saved);
+ uploadBtn.disabled=!data.some(x=>!x.saved);
 }
 
-upload.onclick=async()=>{
+uploadBtn.onclick=async()=>{
  const rows=data.filter(x=>!x.saved).map(x=>({content:x.content}));
+ if(rows.length === 0) return;
 
  try{
    const {error}=await supabase.from('qr_codes').insert(rows);
