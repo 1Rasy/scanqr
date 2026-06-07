@@ -46,15 +46,15 @@ li { margin-bottom: 6px; font-size: 14px; }
 
 <script>
 // ==========================================
-// 1. 全局错误捕获器（移动端极其重要，有任何报错直接弹窗）
+// 1. 全局错误捕获器
 // ==========================================
 window.onerror = function(msg, url, line) {
-  alert("【网页发生JS脚本错误】\n错误信息: " + msg + "\n出错行号: " + line);
+  alert("【网页发生错误】\n错误信息: " + msg + "\n出错行号: " + line);
   return false;
 };
 
 // ==========================================
-// 2. 显式获取 DOM 元素，杜绝快捷访问的兼容性大坑
+// 2. 获取 DOM 元素
 // ==========================================
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
@@ -75,10 +75,10 @@ let scanner = null;
 const data = [];
 const set = new Set();
 
-// 页面加载时进行基础环境诊断
+// 页面加载环境诊断
 window.addEventListener('DOMContentLoaded', () => {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    envInfo.innerText = "环境警告：当前浏览器禁用了相机组件";
+    envInfo.innerText = "环境警告：当前浏览器或协议不支持相机";
     envInfo.style.color = "#ff3b30";
   } else {
     envInfo.innerText = "协议环境安全 (HTTPS)";
@@ -90,9 +90,8 @@ window.addEventListener('DOMContentLoaded', () => {
 // 4. 开启扫码核心逻辑
 // ==========================================
 startBtn.onclick = async () => {
-  // 环境前置检查
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    alert("不可用！当前浏览器或App容器拦截了 H5 相机组件。\n\n【解决办法】：\n1. 如果是苹果手机，必须用 Safari 浏览器打开此链接。\n2. 如果是安卓手机，请使用 Chrome 浏览器打开。");
+    alert("不可用！当前环境禁用了 H5 相机组件。\n\n【如果是苹果手机】:\n请务必点击微信右上角『...』选择『在 Safari 中打开』。");
     return;
   }
 
@@ -107,19 +106,12 @@ startBtn.onclick = async () => {
       scanner = new Html5Qrcode("reader");
     }
 
-    // 移动端动态计算扫码框（自适应屏幕）
-    const qrboxFunction = (viewfinderWidth, viewfinderHeight) => {
-      const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-      const edgeSize = Math.floor(minEdge * 0.65); // 占屏幕窄边 65% 的正方形
-      return { width: edgeSize, height: edgeSize };
-    };
-
-    // 直接采用最激进的直连后置摄像头模式，绕过 getCameras() 的死锁
+    // 【核心修复】：直接写死正方形大小（250px），移除会导致部分移动端传参 undefined 的动态计算函数
     await scanner.start(
       { facingMode: "environment" }, 
       {
-        fps: 15, // 稍微提高帧率，提高移动端扫码敏捷度
-        qrbox: qrboxFunction
+        fps: 10,
+        qrbox: { width: 250, height: 250 } 
       },
       txt => {
         // 扫码成功回调
@@ -127,87 +119,20 @@ startBtn.onclick = async () => {
         set.add(txt);
 
         data.push({ content: txt, saved: false });
-        
-        // 震动反馈
         if (navigator.vibrate) navigator.vibrate(100);
-        
         render();
       },
       errorMessage => {
-        // 忽略扫码期间的逐帧报错，防止频繁日志导致老旧手机卡死
+        // 忽略扫码期间每帧未识别到的日志，防止卡顿
       }
     );
 
   } catch (e) {
-    console.error("启动详情：", e);
-    // 将捕获到的核心相机错误直接抛给用户，便于人眼定位
-    alert("【相机启动崩溃】\n错误类型: " + e.name + "\n核心原因: " + e.message + "\n\n请确认已允许该网页使用摄像头权限，且没有其他App正在占用相机。");
+    console.error("启动失败：", e);
+    alert("【相机启动失败】\n错误类型: " + e.name + "\n核心原因: " + e.message + "\n\n请确保已允许该网页的相机使用权限。");
     resetUI();
   }
 };
 
 // ==========================================
-// 5. 关闭扫码逻辑
-// ==========================================
-stopBtn.onclick = async () => {
-  try {
-    if (scanner && scanner.isScanning) {
-      await scanner.stop();
-    }
-  } catch (e) {
-    console.error("关闭扫码器失败", e);
-  }
-  resetUI();
-};
-
-function resetUI() {
-  readerDiv.style.display = 'none';
-  startBtn.style.display = 'block';
-  stopBtn.style.display = 'none';
-}
-
-// ==========================================
-// 6. 列表渲染逻辑
-// ==========================================
-function render() {
-  countSpan.innerText = data.length;
-  listUl.innerHTML = '';
-
-  data.forEach(x => {
-    const li = document.createElement('li');
-    li.innerHTML = x.content + (x.saved ? ' <span style="color:#34c759;font-weight:bold;">✅ 已同步</span>' : ' <span style="color:#ff9500;font-weight:bold;">⏳ 待上传</span>');
-    listUl.appendChild(li);
-  });
-
-  // 只有存在未保存的数据时，上传按钮才可用
-  uploadBtn.disabled = !data.some(x => !x.saved);
-}
-
-// ==========================================
-// 7. Supabase 上传逻辑
-// ==========================================
-uploadBtn.onclick = async () => {
-  const rows = data.filter(x => !x.saved).map(x => ({ content: x.content }));
-  if (rows.length === 0) return;
-
-  uploadBtn.disabled = true;
-  uploadBtn.innerText = '正在上传...';
-
-  try {
-    const { error } = await supabase.from('qr_codes').insert(rows);
-    if (error) throw error;
-
-    // 修改本地状态为已保存
-    data.forEach(x => x.saved = true);
-    render();
-    alert('🎉 数据已成功上传至 Supabase 数据库');
-  } catch (e) {
-    alert('❌ 上传失败，错误信息: ' + e.message);
-    uploadBtn.disabled = false;
-  } finally {
-    uploadBtn.innerText = '上传到 Supabase';
-  }
-};
-</script>
-</body>
-</html>
+// 5. 关闭扫
